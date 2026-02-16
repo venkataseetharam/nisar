@@ -22,3 +22,5 @@ Connecting NISAR data to tools for analyzing earth surface movement. Objectives:
 2.  Embeddable location filters for selecting sets of countries and states for map exporations with adjacent tabulator grids for use with machine learning models.
 
 3. Integration of our [trade flow data](https://Model.Earth/exiobase/tradeflow/) to create AI training for predictive analysis and impact map details.
+
+Get involved with our related [mapping project at model.earth](https://github.com/ModelEarth/projects/issues/86)
