@@ -1,0 +1,8 @@
+lat,lon,subsidence_value,subsidence_unit,location_name,state,county,zip,season,source_date,source
+29.76,-95.37,1.0,cm/year,Houston TX,Texas,Harris County,77002,annual,2025-Q4,reference
+29.70,-95.40,1.2,cm/year,Pasadena TX,Texas,Harris County,77501,annual,2025-Q4,reference
+29.65,-95.50,0.8,cm/year,Sugar Land TX,Texas,Fort Bend County,77479,annual,2025-Q4,reference
+29.80,-95.25,1.5,cm/year,Baytown TX,Texas,Harris County,77520,annual,2025-Q4,reference
+29.55,-95.10,0.9,cm/year,League City TX,Texas,Galveston County,77573,annual,2025-Q4,reference
+35.69,51.39,33.0,cm/year,Tehran Iran,,,annual,2025-Q4,reference
+-6.13,106.84,27.9,cm/year,North Jakarta Indonesia,,,annual,2025-Q4,reference

@@ -1,0 +1,71 @@
+name: Update NISAR Subsidence Data
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  update-nisar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main (for pipeline scripts)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run NISAR data pipeline
+        run: |
+          mkdir -p data
+          python scripts/fetch_nisar.py --output data/nisar_subsidence.csv
+        env:
+          EARTHDATA_USER: ${{ secrets.EARTHDATA_USER }}
+          EARTHDATA_PASS: ${{ secrets.EARTHDATA_PASS }}
+
+      - name: Publish CSV to nisar-data branch
+        run: |
+          set -euo pipefail
+
+          # Stash the generated CSV outside the git tree
+          cp data/nisar_subsidence.csv /tmp/nisar_subsidence.csv
+
+          git config user.name  "venkataseetharam"
+          git config user.email "pendekantiseetharam@gmail.com"
+
+          # Create or switch to the orphan nisar-data branch
+          if git ls-remote --exit-code --heads origin nisar-data; then
+            git fetch origin nisar-data
+            git checkout nisar-data
+          else
+            git checkout --orphan nisar-data
+            git rm -rf . 2>/dev/null || true
+          fi
+
+          # Replace CSV and push
+          mkdir -p data
+          cp /tmp/nisar_subsidence.csv data/nisar_subsidence.csv
+          git add data/nisar_subsidence.csv
+
+          if git diff --cached --quiet; then
+            echo "No changes — nothing to commit"
+          else
+            git commit -m "chore: update NISAR subsidence data $(date -u +%Y-%m-%d)"
+            git push origin nisar-data
+          fi
