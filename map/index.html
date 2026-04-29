@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NISAR Subsidence Map</title>
+  <link rel="icon" type="image/x-icon" href="../../../img/logo/neighborhood/favicon.png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsfive@0.3.7/dist/hdf5.js"></script>
+  <style>
+    :root {
+      --bg: #f3f6f3;
+      --panel: #ffffff;
+      --text: #1f2a1f;
+      --muted: #5d6e5d;
+      --border: #d8e2d8;
+      --accent: #2f7d32;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top left, #e7f2ea 0%, #f6f9f7 55%, #ffffff 100%);
+      min-height: 100vh;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      min-height: 100vh;
+    }
+
+    .panel {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 18px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    h1 { font-size: 1.25rem; }
+
+    .subtext {
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.4;
+    }
+
+    .status-bar {
+      font-size: 0.78rem;
+      padding: 5px 9px;
+      border-radius: 6px;
+      background: #e8f5e9;
+      color: #2f7d32;
+      border: 1px solid #c8e6c9;
+    }
+    .status-bar.loading { background: #fff8e1; color: #f57f17; border-color: #ffe082; }
+    .status-bar.error   { background: #fff3e0; color: #e65100; border-color: #ffe0b2; }
+
+    /* Progress */
+    .progress-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .progress-wrap.visible { display: flex; }
+    .progress-bar-bg {
+      background: #e0e0e0; border-radius: 4px; height: 6px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; background: var(--accent); border-radius: 4px;
+      transition: width 0.2s;
+      width: 0%;
+    }
+    .progress-text { font-size: 0.75rem; color: var(--muted); }
+
+    label {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    select, button {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.88rem;
+      padding: 7px 10px;
+      background: #fff;
+      color: var(--text);
+    }
+    button {
+      cursor: pointer;
+      border-color: var(--accent);
+      color: #fff;
+      background: var(--accent);
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    button:hover { filter: brightness(0.92); }
+
+    /* Color scale legend */
+    .legend-wrap { }
+    .legend-title { font-size: 0.82rem; font-weight: 600; margin-bottom: 6px; }
+    .color-bar {
+      height: 12px;
+      border-radius: 4px;
+      background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
+      margin-bottom: 4px;
+    }
+    .color-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    /* Seasonal summary */
+    .season-summary { display: none; }
+    .season-summary.visible { display: block; }
+    .season-summary h2 { font-size: 0.85rem; font-weight: 600; margin-bottom: 7px; }
+    .season-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .season-card {
+      background: #f8fdf8; border: 1px solid var(--border);
+      border-radius: 6px; padding: 7px 9px; font-size: 0.78rem;
+    }
+    .season-card .s-name { font-weight: 600; }
+    .season-card .s-val  { color: var(--muted); margin-top: 2px; }
+
+    /* Record list */
+    .records { display: grid; gap: 7px; }
+    .record {
+      border: 1px solid var(--border);
+      border-left: 4px solid #2b8cbe;
+      border-radius: 7px;
+      padding: 9px;
+      background: #fff;
+      cursor: pointer;
+      transition: box-shadow 0.15s;
+    }
+    .record:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .record h3 { font-size: 0.88rem; margin-bottom: 3px; }
+    .record .meta { color: var(--muted); font-size: 0.77rem; line-height: 1.3; }
+    .record .rate { margin-top: 5px; font-weight: 700; font-size: 0.85rem; }
+
+    #map { height: 100vh; width: 100%; }
+
+    .leaflet-popup-content { line-height: 1.35; margin: 10px 12px; }
+
+    .map-hint {
+      position: absolute;
+      z-index: 900;
+      right: 12px; top: 12px;
+      background: rgba(255,255,255,0.93);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      max-width: 240px;
+      pointer-events: none;
+    }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .panel { border-right: none; border-bottom: 1px solid var(--border); }
+      #map { height: 60vh; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <aside class="panel">
+    <div>
+      <h1>NISAR Ground Subsidence</h1>
+      <p class="subtext" style="margin-top:6px;">
+        Land sinking due to groundwater over-pumping, from
+        NASA NISAR satellite data. Heatmap shows subsidence
+        rates across regions — blue (low) to red (high).
+      </p>
+    </div>
+
+    <div class="status-bar loading" id="statusBar">Initialising…</div>
+
+    <!-- Progress bar (shown while loading HDF5) -->
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">Downloading…</div>
+    </div>
+
+    <!-- Filters -->
+    <div>
+      <label for="dataSource">Data source</label>
+      <select id="dataSource">
+        <option value="hdf5">HDF5 raster (heatmap)</option>
+        <option value="csv">CSV pipeline (state/county/ZIP)</option>
+      </select>
+    </div>
+
+    <div id="csvFilters" style="display:none; display:flex; flex-direction:column; gap:10px;">
+      <div>
+        <label for="stateFilter">US State</label>
+        <select id="stateFilter"><option value="all">All states / global</option></select>
+      </div>
+      <div>
+        <label for="countyFilter">County</label>
+        <select id="countyFilter"><option value="all">All counties</option></select>
+      </div>
+      <div>
+        <label for="seasonFilter">Season</label>
+        <select id="seasonFilter">
+          <option value="all">All seasons</option>
+          <option value="Spring">Spring</option>
+          <option value="Summer">Summer</option>
+          <option value="Fall">Fall</option>
+          <option value="Winter">Winter</option>
+          <option value="annual">Annual</option>
+        </select>
+      </div>
+    </div>
+
+    <div>
+      <label for="unitSelect">Display unit</label>
+      <select id="unitSelect">
+        <option value="cm">cm / year</option>
+        <option value="in">inches / year</option>
+      </select>
+    </div>
+
+    <button id="fitBtn">Fit To Visible Points</button>
+
+    <!-- Color scale -->
+    <div class="legend-wrap">
+      <div class="legend-title">Subsidence rate</div>
+      <div class="color-bar"></div>
+      <div class="color-labels">
+        <span>Low</span><span>▶</span><span>High</span>
+      </div>
+    </div>
+
+    <!-- Seasonal summary (CSV mode) -->
+    <div class="season-summary" id="seasonSummary">
+      <h2>Seasonal Summary</h2>
+      <div class="season-grid" id="seasonGrid"></div>
+    </div>
+
+    <!-- Record list (CSV mode) -->
+    <div class="records" id="records"></div>
+
+    <p class="subtext" style="font-size:0.75rem;">
+      Source: <a href="https://science.nasa.gov/mission/nisar/data" target="_blank">NASA NISAR</a>.
+      CSV pipeline refreshes weekly via GitHub Actions.
+    </p>
+  </aside>
+
+  <!-- ── Map ────────────────────────────────────────── -->
+  <main style="position:relative;">
+    <div id="map"></div>
+    <div class="map-hint">Click map to toggle scroll-wheel zoom.</div>
+  </main>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────
+const HDF5_URL = "NISAR_L2.h5";  // local HDF5 file (served alongside HTML)
+// CSV is published to the `nisar-data` branch by the weekly GitHub Actions workflow.
+// Using the fork's nisar-data branch; once upstreamed, change to ModelEarth/nisar.
+const CSV_URL  =
+  "https://raw.githubusercontent.com/venkataseetharam/nisar/nisar-data/data/nisar_subsidence.csv";
+
+// Fallback city data (used if both HDF5 and CSV fail)
+const FALLBACK = [
+  { lat:29.76,  lon:-95.37,  cm:1.0,  place:"Houston, TX",           state:"Texas",   county:"Harris County", zip:"77002", season:"annual", source:"reference" },
+  { lat:35.69,  lon:51.39,   cm:33.0, place:"Tehran, Iran",           state:"",        county:"",              zip:"",      season:"annual", source:"reference" },
+  { lat:-6.13,  lon:106.84,  cm:27.9, place:"North Jakarta, Indonesia",state:"",       county:"",              zip:"",      season:"annual", source:"reference" },
+];
+
+// ─────────────────────────────────────────────────────────────
+// Map
+// ─────────────────────────────────────────────────────────────
+const map = L.map("map", { scrollWheelZoom: false, doubleClickZoom: false })
+              .setView([20, 0], 2);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "&copy; OpenStreetMap contributors"
+}).addTo(map);
+
+let zoomEnabled = false;
+map.on("click", () => {
+  zoomEnabled = !zoomEnabled;
+  zoomEnabled ? (map.scrollWheelZoom.enable(), map.doubleClickZoom.enable())
+              : (map.scrollWheelZoom.disable(), map.doubleClickZoom.disable());
+});
+
+// ─────────────────────────────────────────────────────────────
+// DOM
+// ─────────────────────────────────────────────────────────────
+const statusBar    = document.getElementById("statusBar");
+const progressWrap = document.getElementById("progressWrap");
+const progressFill = document.getElementById("progressFill");
+const progressText = document.getElementById("progressText");
+const dataSource   = document.getElementById("dataSource");
+const csvFilters   = document.getElementById("csvFilters");
+const stateFilter  = document.getElementById("stateFilter");
+const countyFilter = document.getElementById("countyFilter");
+const seasonFilter = document.getElementById("seasonFilter");
+const unitSelect   = document.getElementById("unitSelect");
+const fitBtn       = document.getElementById("fitBtn");
+const recordsEl    = document.getElementById("records");
+const seasonSum    = document.getElementById("seasonSummary");
+const seasonGrid   = document.getElementById("seasonGrid");
+
+const markersLayer = L.layerGroup().addTo(map);
+const markerById   = new Map();
+let csvRecords = [];
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+function setStatus(msg, type = "ok") {
+  statusBar.textContent = msg;
+  statusBar.className = "status-bar" + (type === "ok" ? "" : ` ${type}`);
+}
+
+function showProgress(show) {
+  progressWrap.classList.toggle("visible", show);
+}
+
+/**
+ * HSL heatmap color: blue (0) → cyan → green → yellow → red (1)
+ */
+function heatColor(norm) {
+  const hue = (1 - Math.max(0, Math.min(1, norm))) * 240;
+  return `hsl(${hue.toFixed(0)}, 100%, 50%)`;
+}
+
+function rateText(cm, unit) {
+  return unit === "in"
+    ? `${(cm / 2.54).toFixed(2)} in/yr`
+    : `${cm.toFixed(2)} cm/yr`;
+}
+
+function fitToVisible(animate = true) {
+  const pts = [];
+  markersLayer.eachLayer(l => { if (l.getLatLng) pts.push(l.getLatLng()); });
+  if (!pts.length) return;
+  map.fitBounds(L.latLngBounds(pts), { padding: [30, 30], maxZoom: 10, animate });
+}
+
+// ─────────────────────────────────────────────────────────────
+// HDF5 mode  (heatmap from raster data)
+// ─────────────────────────────────────────────────────────────
+
+function flattenArray(arr) {
+  if (!Array.isArray(arr)) return [arr];
+  return arr.reduce((acc, v) => acc.concat(flattenArray(v)), []);
+}
+
+function analyzeFlat(flat) {
+  const valid = flat.filter(v => v != null && isFinite(v) && !isNaN(v));
+  if (!valid.length) return null;
+  return { valid, min: Math.min(...valid), max: Math.max(...valid) };
+}
+
+function findDatasets(obj, path = "") {
+  const coords = [], data = [];
+  for (const [k, v] of Object.entries(obj)) {
+    const full = path ? `${path}/${k}` : k;
+    const lk = k.toLowerCase();
+    if (v && v.value !== undefined) {
+      if (lk.includes("lat")) coords.push({ type:"lat", key:k, value:v.value, path:full });
+      else if (lk.includes("lon")) coords.push({ type:"lon", key:k, value:v.value, path:full });
+      else if (Array.isArray(v.value) && v.value.length > 100)
+        data.push({ key:k, value:v.value, path:full });
+    } else if (v && typeof v === "object") {
+      const n = findDatasets(v, full);
+      coords.push(...n.coords); data.push(...n.data);
+    }
+  }
+  return { coords, data };
+}
+
+function renderHeatmap(lats, lons, vals, min, max) {
+  markersLayer.clearLayers();
+  markerById.clear();
+  const unit = unitSelect.value;
+
+  // Sample to ≤ 8 000 points for performance
+  const step = Math.max(1, Math.floor(lats.length / 8000));
+  for (let i = 0; i < lats.length; i += step) {
+    const lat = lats[i], lon = lons[i], v = vals[i];
+    if (!isFinite(lat) || !isFinite(lon) || !isFinite(v)) continue;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+
+    const norm  = max > min ? (v - min) / (max - min) : 0.5;
+    const color = heatColor(norm);
+    const cm    = Math.abs(v) * 100; // assume raw value in metres, convert to cm
+
+    L.circleMarker([lat, lon], {
+      radius: 2.5, color, weight: 0, fillColor: color, fillOpacity: 0.85
+    }).bindPopup(
+      `<strong>Subsidence:</strong> ${rateText(cm, unit)}<br>
+       <strong>Lat:</strong> ${lat.toFixed(4)}<br>
+       <strong>Lon:</strong> ${lon.toFixed(4)}`
+    ).addTo(markersLayer);
+  }
+
+  fitToVisible(false);
+  setStatus(`Heatmap rendered — ${markersLayer.getLayers().length.toLocaleString()} points`);
+}
+
+async function loadHDF5() {
+  setStatus("Downloading HDF5 file…", "loading");
+  showProgress(true);
+
+  try {
+    const res = await fetch(HDF5_URL);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const total = parseInt(res.headers.get("content-length") || "0", 10);
+    const reader = res.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      if (total) {
+        const pct = Math.round((loaded / total) * 100);
+        progressFill.style.width = `${pct}%`;
+        progressText.textContent =
+          `${(loaded / 1e6).toFixed(1)} MB / ${(total / 1e6).toFixed(1)} MB (${pct}%)`;
+      }
+    }
+
+    showProgress(false);
+    setStatus("Parsing HDF5…", "loading");
+
+    const buf = new Uint8Array(loaded);
+    let pos = 0;
+    for (const c of chunks) { buf.set(c, pos); pos += c.length; }
+
+    const h5 = new hdf5.File(buf.buffer);
+    const { coords, data } = findDatasets(h5);
+
+    const latInfo  = coords.find(c => c.type === "lat");
+    const lonInfo  = coords.find(c => c.type === "lon");
+    const dataInfo = data[0];
+
+    if (!latInfo || !lonInfo || !dataInfo) throw new Error("Could not locate lat/lon/data in HDF5");
+
+    const lats = flattenArray(latInfo.value);
+    const lons = flattenArray(lonInfo.value);
+    const vals = flattenArray(dataInfo.value);
+    const stats = analyzeFlat(vals);
+    if (!stats) throw new Error("No valid data values found");
+
+    renderHeatmap(lats, lons, vals, stats.min, stats.max);
+    return true;
+  } catch (err) {
+    showProgress(false);
+    console.warn("HDF5 load failed:", err);
+    setStatus(`HDF5 unavailable (${err.message}) — falling back to CSV`, "error");
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CSV mode  (state / county / ZIP / season filters)
+// ─────────────────────────────────────────────────────────────
+
+function parseLine(line) {
+  const vals = []; let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+    else if (c === ',' && !inQ) { vals.push(cur); cur = ""; }
+    else cur += c;
+  }
+  vals.push(cur);
+  return vals.map(v => v.trim());
+}
+
+function toCm(val, unit) {
+  const n = parseFloat(val);
+  if (!isFinite(n)) return null;
+  return String(unit).toLowerCase().includes("in") ? n * 2.54 : n;
+}
+
+function normalizeRow(row) {
+  const lat = parseFloat(row.lat || row.latitude);
+  const lon = parseFloat(row.lon || row.longitude);
+  const cm  = toCm(row.subsidence_value || row.value,
+                   row.subsidence_unit  || row.unit || "cm/year");
+  if (!isFinite(lat) || !isFinite(lon) || !isFinite(cm)) return null;
+  return {
+    id:     `${lat},${lon}`,
+    place:  row.location_name || "Unknown",
+    state:  row.state  || "", county: row.county || "",
+    zip:    row.zip    || "", season: row.season || "annual",
+    source: row.source || "NISAR",
+    lat, lon, cm,
+  };
+}
+
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const headers = parseLine(lines[0]);
+  return lines.slice(1).map(l => {
+    const row = {}; parseLine(l).forEach((v, i) => { row[headers[i]] = v; });
+    return normalizeRow(row);
+  }).filter(Boolean);
+}
+
+async function loadCSV() {
+  setStatus("Loading CSV data…", "loading");
+  try {
+    const res = await fetch(CSV_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = parseCsv(await res.text());
+    if (!rows.length) throw new Error("0 valid rows");
+    setStatus(`CSV loaded — ${rows.length} locations`);
+    return rows;
+  } catch (err) {
+    console.warn("CSV load failed, using fallback:", err);
+    setStatus("Using reference data (CSV fetch failed)", "error");
+    return FALLBACK;
+  }
+}
+
+function populateFilters(records) {
+  const states = [...new Set(records.map(r => r.state).filter(Boolean))].sort();
+  stateFilter.innerHTML = '<option value="all">All states / global</option>';
+  states.forEach(s => {
+    const o = document.createElement("option"); o.value = s; o.textContent = s;
+    stateFilter.appendChild(o);
+  });
+  updateCountyFilter(records);
+}
+
+function updateCountyFilter(records) {
+  const sel = stateFilter.value;
+  const counties = [...new Set(
+    records.filter(r => sel === "all" || r.state === sel).map(r => r.county).filter(Boolean)
+  )].sort();
+  countyFilter.innerHTML = '<option value="all">All counties</option>';
+  counties.forEach(c => {
+    const o = document.createElement("option"); o.value = c; o.textContent = c;
+    countyFilter.appendChild(o);
+  });
+}
+
+function visibleCSV() {
+  return csvRecords.filter(r => {
+    if (stateFilter.value  !== "all" && r.state  !== stateFilter.value)  return false;
+    if (countyFilter.value !== "all" && r.county !== countyFilter.value) return false;
+    if (seasonFilter.value !== "all" && r.season !== seasonFilter.value) return false;
+    return true;
+  });
+}
+
+function renderSeasonSummary(visible) {
+  const bySeason = {};
+  visible.forEach(r => { (bySeason[r.season] = bySeason[r.season] || []).push(r.cm); });
+  const seasons = Object.keys(bySeason);
+  if (!seasons.length) { seasonSum.classList.remove("visible"); return; }
+  const unit = unitSelect.value;
+  seasonSum.classList.add("visible");
+  seasonGrid.innerHTML = seasons.map(s => {
+    const avg = bySeason[s].reduce((a, b) => a + b, 0) / bySeason[s].length;
+    const disp = rateText(avg, unit);
+    return `<div class="season-card">
+      <div class="s-name">${s}</div>
+      <div class="s-val">avg ${disp}<br><small>${bySeason[s].length} loc.</small></div>
+    </div>`;
+  }).join("");
+}
+
+function renderCSVMap() {
+  markersLayer.clearLayers(); markerById.clear();
+  const unit = unitSelect.value;
+  const list = visibleCSV();
+
+  if (!list.length) { setStatus("No records match filters", "error"); return; }
+
+  const maxCm = Math.max(...list.map(r => r.cm));
+  list.forEach(r => {
+    const norm  = maxCm > 0 ? r.cm / maxCm : 0.5;
+    const color = heatColor(norm);
+    const radius = Math.max(5, Math.min(20, 5 + r.cm * 0.3));
+
+    const m = L.circleMarker([r.lat, r.lon], {
+      radius, color, weight: 1.5, fillColor: color, fillOpacity: 0.4
+    }).bindPopup(`
+      <strong>${r.place}</strong><br>
+      ${[r.county, r.state].filter(Boolean).join(", ")}<br>
+      ${r.zip ? `ZIP ${r.zip}<br>` : ""}
+      <strong>Rate:</strong> ${rateText(r.cm, unit)}<br>
+      <strong>Season:</strong> ${r.season}<br>
+      <strong>Source:</strong> ${r.source}
+    `);
+    m.addTo(markersLayer);
+    markerById.set(r.id, m);
+  });
+
+  fitToVisible(false);
+  renderSeasonSummary(list);
+  renderRecordList(list, unit);
+  setStatus(`${list.length} location${list.length > 1 ? "s" : ""} shown`);
+}
+
+function renderRecordList(list, unit) {
+  if (!list.length) { recordsEl.innerHTML = "<p class='subtext'>No records match this filter.</p>"; return; }
+  const maxCm = Math.max(...list.map(r => r.cm));
+  recordsEl.innerHTML = list.map(r => {
+    const color = heatColor(maxCm > 0 ? r.cm / maxCm : 0.5);
+    const meta  = [r.county, r.state, r.zip ? `ZIP ${r.zip}` : ""].filter(Boolean).join(" · ");
+    return `<article class="record" data-id="${r.id}" style="border-left-color:${color};">
+      <h3>${r.place}</h3>
+      ${meta ? `<p class="meta">${meta}</p>` : ""}
+      <p class="meta">Season: ${r.season}</p>
+      <p class="rate" style="color:${color};">${rateText(r.cm, unit)}</p>
+    </article>`;
+  }).join("");
+
+  recordsEl.querySelectorAll(".record").forEach(card => {
+    card.addEventListener("click", () => {
+      const m = markerById.get(card.dataset.id);
+      if (m) { map.setView(m.getLatLng(), 9, { animate: true }); m.openPopup(); }
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mode switching
+// ─────────────────────────────────────────────────────────────
+function showCSVMode(show) {
+  csvFilters.style.display    = show ? "flex" : "none";
+  seasonSum.classList.toggle("visible", false);
+  recordsEl.innerHTML = "";
+}
+
+async function activateMode(mode) {
+  markersLayer.clearLayers(); markerById.clear();
+  if (mode === "hdf5") {
+    showCSVMode(false);
+    const ok = await loadHDF5();
+    if (!ok) {
+      // graceful fallback: switch to CSV
+      dataSource.value = "csv";
+      await activateMode("csv");
+    }
+  } else {
+    showCSVMode(true);
+    csvRecords = await loadCSV();
+    populateFilters(csvRecords);
+    renderCSVMap();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Event listeners
+// ─────────────────────────────────────────────────────────────
+dataSource.addEventListener("change", () => activateMode(dataSource.value));
+stateFilter.addEventListener("change", () => { updateCountyFilter(csvRecords); countyFilter.value = "all"; renderCSVMap(); });
+countyFilter.addEventListener("change", renderCSVMap);
+seasonFilter.addEventListener("change", renderCSVMap);
+unitSelect.addEventListener("change", () => { if (dataSource.value === "csv") renderCSVMap(); });
+fitBtn.addEventListener("click", () => fitToVisible(true));
+
+// ─────────────────────────────────────────────────────────────
+// Boot — start in HDF5 heatmap mode; fall back to CSV if needed
+// ─────────────────────────────────────────────────────────────
+activateMode("hdf5");
+</script>
+</body>
+</html>
