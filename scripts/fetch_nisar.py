@@ -55,6 +55,7 @@ FALLBACK_ROWS = [
         "county": "Harris County", "zip": "77002",
         "season": "annual", "source_date": "2025-Q4",
         "source": "reference",
+        "ref_date": "", "sec_date": "", "baseline_days": 12,
     },
     {
         "lat": 35.69, "lon": 51.39,
@@ -62,6 +63,7 @@ FALLBACK_ROWS = [
         "location_name": "Tehran, Iran", "state": "", "county": "", "zip": "",
         "season": "annual", "source_date": "2025-Q4",
         "source": "reference",
+        "ref_date": "", "sec_date": "", "baseline_days": 12,
     },
     {
         "lat": -6.13, "lon": 106.84,
@@ -69,6 +71,7 @@ FALLBACK_ROWS = [
         "location_name": "North Jakarta, Indonesia", "state": "", "county": "", "zip": "",
         "season": "annual", "source_date": "2025-Q4",
         "source": "reference",
+        "ref_date": "", "sec_date": "", "baseline_days": 12,
     },
 ]
 
@@ -76,6 +79,7 @@ CSV_FIELDS = [
     "lat", "lon", "subsidence_value", "subsidence_unit",
     "location_name", "state", "county", "zip",
     "season", "source_date", "source",
+    "ref_date", "sec_date", "baseline_days",
 ]
 
 
@@ -157,43 +161,149 @@ def download_granule(granule: dict, dest_dir: Path) -> Path | None:
 # HDF5 extraction
 # ---------------------------------------------------------------------------
 
-def extract_displacement(h5_path: Path) -> pd.DataFrame | None:
+# NISAR L-band radar wavelength (metres). LOS displacement from unwrapped
+# phase:  d = -(lambda / 4*pi) * phi
+NISAR_WAVELENGTH_M = 0.2422
+
+# ~100 km grid spacing in degrees (1 deg latitude ~= 111 km)
+GRID_DEG = 0.9
+
+
+def _first_existing(h5: h5py.File, candidates: list[str]):
+    """Return the first dataset path that exists in the HDF5 file, else None."""
+    for path in candidates:
+        if path in h5:
+            return path
+    return None
+
+
+def _read_dates(h5: h5py.File) -> tuple[str, str, int]:
     """
-    Read an NISAR DISP-S1 HDF5 file and extract per-pixel subsidence rates.
-    Returns a DataFrame with columns: lat, lon, disp_cm_per_year.
+    Pull the reference / secondary acquisition dates and temporal baseline
+    (days) from a GUNW granule. Falls back gracefully if attrs differ.
     """
+    id_grp = "/science/LSAR/identification"
+
+    def _get(name, default=""):
+        try:
+            v = h5[f"{id_grp}/{name}"][()]
+            return v.decode() if isinstance(v, bytes) else str(v)
+        except Exception:
+            return default
+
+    ref = _get("referenceZeroDopplerStartTime") or _get("referenceDatetime")
+    sec = _get("secondaryZeroDopplerStartTime") or _get("secondaryDatetime")
+    ref_d, sec_d = ref[:10], sec[:10]
+    try:
+        d0 = datetime.strptime(ref_d, "%Y-%m-%d")
+        d1 = datetime.strptime(sec_d, "%Y-%m-%d")
+        baseline = abs((d1 - d0).days)
+    except Exception:
+        baseline = 12  # nominal NISAR repeat
+    return ref_d, sec_d, baseline
+
+
+def extract_displacement(h5_path: Path) -> tuple[pd.DataFrame | None, dict]:
+    """
+    Read a NISAR GUNW (Geocoded Unwrapped Interferogram) HDF5 file and
+    convert unwrapped phase -> line-of-sight elevation change (mm) over the
+    interferogram's 6-12 day interval.
+
+    Returns (DataFrame[lat, lon, disp_mm], meta) where meta carries the
+    reference/secondary dates and temporal baseline in days.
+    """
+    meta = {"ref_date": "", "sec_date": "", "baseline_days": 12}
     try:
         with h5py.File(h5_path, "r") as f:
-            # DISP-S1 structure: /science/LSAR/DISP/grids/...
-            disp_group = f["/science/LSAR/DISP/grids/displacementGroup"]
-            lats = disp_group["latitude"][:]
-            lons = disp_group["longitude"][:]
-            # cumulative displacement in meters; convert to cm/year
-            disp_m = disp_group["displacement"][:]
-            # temporal baseline from attributes (days)
-            baseline_days = disp_group.attrs.get("temporalBaseline", 365)
-            disp_cm_year = (disp_m / baseline_days) * 365 * 100
+            meta["ref_date"], meta["sec_date"], meta["baseline_days"] = _read_dates(f)
 
-            # Flatten 2-D grids
-            lats_flat = lats.ravel()
-            lons_flat = lons.ravel()
-            vals_flat = disp_cm_year.ravel()
+            base = "/science/LSAR/GUNW/grids/frequencyA/unwrappedInterferogram"
+            # Polarisation sub-group varies (HH / VV); pick the first present.
+            phase_path = _first_existing(f, [
+                f"{base}/HH/unwrappedPhase",
+                f"{base}/VV/unwrappedPhase",
+                f"{base}/unwrappedPhase",
+            ])
+            coh_path = _first_existing(f, [
+                f"{base}/HH/coherenceMagnitude",
+                f"{base}/VV/coherenceMagnitude",
+                f"{base}/coherenceMagnitude",
+            ])
+            if phase_path is None:
+                print(f"  no unwrappedPhase in {h5_path.name}")
+                return None, meta
 
-            # Keep only subsidence (negative = sinking); take absolute value
-            mask = np.isfinite(vals_flat) & (vals_flat < 0)
+            phase = f[phase_path][:].astype("float64")
+
+            # Coordinate axes live alongside the grid (xCoordinates /
+            # yCoordinates in the granule's projected CRS, plus an EPSG code).
+            grid = f[f"{base}/HH"] if f"{base}/HH" in f else f[base]
+            x = grid["xCoordinates"][:] if "xCoordinates" in grid else f[f"{base}/xCoordinates"][:]
+            y = grid["yCoordinates"][:] if "yCoordinates" in grid else f[f"{base}/yCoordinates"][:]
+
+            lon2d, lat2d = _to_lonlat(f, x, y, base)
+
+            # phase -> LOS displacement in mm
+            disp_mm = -(NISAR_WAVELENGTH_M / (4.0 * np.pi)) * phase * 1000.0
+
+            lat_flat = lat2d.ravel()
+            lon_flat = lon2d.ravel()
+            val_flat = disp_mm.ravel()
+
+            mask = np.isfinite(val_flat) & (val_flat != 0)
+            if coh_path is not None:
+                coh = f[coh_path][:].astype("float64").ravel()
+                mask &= np.isfinite(coh) & (coh > 0.3)   # drop low-coherence noise
+
             return pd.DataFrame({
-                "lat": lats_flat[mask],
-                "lon": lons_flat[mask],
-                "disp_cm_per_year": np.abs(vals_flat[mask]),
-            })
+                "lat": lat_flat[mask],
+                "lon": lon_flat[mask],
+                "disp_mm": val_flat[mask],
+            }), meta
     except Exception as exc:
         print(f"ERROR reading {h5_path.name}: {exc}")
-        return None
+        return None, meta
 
 
-def sample_top_locations(df: pd.DataFrame, n: int = 200) -> pd.DataFrame:
-    """Down-sample to the top-N highest-subsidence pixels to keep CSV small."""
-    return df.nlargest(n, "disp_cm_per_year").reset_index(drop=True)
+def _to_lonlat(h5: h5py.File, x: np.ndarray, y: np.ndarray, base: str):
+    """
+    Build 2-D lon/lat grids from projected x/y coordinates. GUNW grids are
+    UTM/polar-stereo; reproject via the granule's EPSG code. If already
+    geographic (EPSG:4326) just meshgrid.
+    """
+    epsg = 4326
+    try:
+        proj = h5[f"{base}/projection"]
+        epsg = int(proj.attrs.get("epsg_code", proj[()] if proj.shape == () else 4326))
+    except Exception:
+        pass
+
+    xx, yy = np.meshgrid(x, y)
+    if epsg == 4326:
+        return xx, yy
+
+    from pyproj import Transformer
+    transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    lon, lat = transformer.transform(xx, yy)
+    return lon, lat
+
+
+def decimate_to_grid(df: pd.DataFrame, grid_deg: float = GRID_DEG) -> pd.DataFrame:
+    """
+    Reduce a dense raster to one representative point per ~100 km cell
+    (median displacement). Keeps the output continent-wide but tiny.
+    """
+    if df.empty:
+        return df
+    g = df.copy()
+    g["cell_lat"] = (np.round(g["lat"] / grid_deg) * grid_deg).round(3)
+    g["cell_lon"] = (np.round(g["lon"] / grid_deg) * grid_deg).round(3)
+    agg = (
+        g.groupby(["cell_lat", "cell_lon"], as_index=False)
+         .agg(disp_mm=("disp_mm", "median"), n=("disp_mm", "size"))
+         .rename(columns={"cell_lat": "lat", "cell_lon": "lon"})
+    )
+    return agg[agg["n"] >= 3].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -252,21 +362,24 @@ def date_to_season(date_str: str) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
-def build_output_rows(enriched: pd.DataFrame, source_date: str, season: str) -> list[dict]:
+def build_output_rows(enriched: pd.DataFrame, season: str, meta: dict) -> list[dict]:
     rows = []
     for _, r in enriched.iterrows():
         rows.append({
             "lat":               round(float(r["lat"]), 5),
             "lon":               round(float(r["lon"]), 5),
-            "subsidence_value":  round(float(r["disp_cm_per_year"]), 2),
-            "subsidence_unit":   "cm/year",
+            "subsidence_value":  round(float(r["disp_mm"]), 2),
+            "subsidence_unit":   "mm/interval",
             "location_name":     f"{r.get('county', '')} {r.get('state', '')}".strip() or "Unknown",
             "state":             r.get("state", ""),
             "county":            r.get("county", ""),
             "zip":               r.get("zip", ""),
             "season":            season,
-            "source_date":       source_date,
-            "source":            "NISAR-DISP-S1",
+            "source_date":       meta.get("sec_date", ""),
+            "source":            "NISAR-GUNW",
+            "ref_date":          meta.get("ref_date", ""),
+            "sec_date":          meta.get("sec_date", ""),
+            "baseline_days":     meta.get("baseline_days", 12),
         })
     return rows
 
@@ -315,13 +428,14 @@ def main() -> None:
                 h5_path = download_granule(granule, tmp_path)
                 if not h5_path:
                     continue
-                df_raw = extract_displacement(h5_path)
+                df_raw, meta = extract_displacement(h5_path)
                 if df_raw is None or df_raw.empty:
                     continue
-                df_sampled = sample_top_locations(df_raw, n=200)
-                df_enriched = enrich_with_geography(df_sampled, cache_dir)
-                source_date = granule.get("time_start", end_str)[:10]
-                all_rows.extend(build_output_rows(df_enriched, source_date, season))
+                df_grid = decimate_to_grid(df_raw)        # ~100 km cells
+                if df_grid.empty:
+                    continue
+                df_enriched = enrich_with_geography(df_grid, cache_dir)
+                all_rows.extend(build_output_rows(df_enriched, season, meta))
     else:
         print("No NISAR granules found — using hardcoded fallback data.")
 
