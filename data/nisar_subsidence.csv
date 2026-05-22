@@ -1,8 +1,11 @@
-lat,lon,subsidence_value,subsidence_unit,location_name,state,county,zip,season,source_date,source
-29.76,-95.37,1.0,cm/year,Houston TX,Texas,Harris County,77002,annual,2025-Q4,reference
-29.70,-95.40,1.2,cm/year,Pasadena TX,Texas,Harris County,77501,annual,2025-Q4,reference
-29.65,-95.50,0.8,cm/year,Sugar Land TX,Texas,Fort Bend County,77479,annual,2025-Q4,reference
-29.80,-95.25,1.5,cm/year,Baytown TX,Texas,Harris County,77520,annual,2025-Q4,reference
-29.55,-95.10,0.9,cm/year,League City TX,Texas,Galveston County,77573,annual,2025-Q4,reference
-35.69,51.39,33.0,cm/year,Tehran Iran,,,annual,2025-Q4,reference
--6.13,106.84,27.9,cm/year,North Jakarta Indonesia,,,annual,2025-Q4,reference
+lat,lon,subsidence_value,subsidence_unit,location_name,state,county,zip,season,source_date,source,ref_date,sec_date,baseline_days
+29.76,-95.37,-7.8,mm/interval,Harris County Texas,Texas,Harris County,77002,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+29.70,-95.40,-9.1,mm/interval,Harris County Texas,Texas,Harris County,77501,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+29.65,-95.50,-5.4,mm/interval,Fort Bend County Texas,Texas,Fort Bend County,77479,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+32.78,-96.80,-3.2,mm/interval,Dallas County Texas,Texas,Dallas County,75201,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+33.45,-112.07,-6.7,mm/interval,Maricopa County Arizona,Arizona,Maricopa County,85003,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+36.75,-119.77,-11.3,mm/interval,Fresno County California,California,Fresno County,93721,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+34.05,-118.24,-2.1,mm/interval,Los Angeles County California,California,Los Angeles County,90012,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+38.58,-121.49,-4.8,mm/interval,Sacramento County California,California,Sacramento County,95814,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+29.95,-90.07,-8.9,mm/interval,Orleans Parish Louisiana,Louisiana,Orleans Parish,70112,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
+40.71,-74.01,1.4,mm/interval,New York County New York,New York,New York County,10007,Fall,2025-10-29,NISAR-GUNW,2025-10-17,2025-10-29,12
