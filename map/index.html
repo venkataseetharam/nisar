@@ -180,11 +180,12 @@
   <!-- ── Sidebar ─────────────────────────────────────── -->
   <aside class="panel">
     <div>
-      <h1>NISAR Ground Subsidence</h1>
+      <h1>NISAR Elevation Change</h1>
       <p class="subtext" style="margin-top:6px;">
-        Land sinking due to groundwater over-pumping, from
-        NASA NISAR satellite data. Heatmap shows subsidence
-        rates across regions — blue (low) to red (high).
+        Line-of-sight ground motion from NASA NISAR GUNW
+        interferograms — each measures elevation change over a
+        6–12 day repeat pass. Negative = subsidence (sinking),
+        positive = uplift. Colour shows magnitude of change.
       </p>
     </div>
 
@@ -200,8 +201,8 @@
     <div>
       <label for="dataSource">Data source</label>
       <select id="dataSource">
+        <option value="csv">GUNW pipeline (elevation change)</option>
         <option value="hdf5">HDF5 raster (heatmap)</option>
-        <option value="csv">CSV pipeline (state/county/ZIP)</option>
       </select>
     </div>
 
@@ -230,8 +231,8 @@
     <div>
       <label for="unitSelect">Display unit</label>
       <select id="unitSelect">
-        <option value="cm">cm / year</option>
-        <option value="in">inches / year</option>
+        <option value="mm">mm / interval (6–12 days)</option>
+        <option value="cmYr">cm / year (annualised)</option>
       </select>
     </div>
 
@@ -239,10 +240,10 @@
 
     <!-- Color scale -->
     <div class="legend-wrap">
-      <div class="legend-title">Subsidence rate</div>
+      <div class="legend-title">Elevation change magnitude</div>
       <div class="color-bar"></div>
       <div class="color-labels">
-        <span>Low</span><span>▶</span><span>High</span>
+        <span>Stable</span><span>▶</span><span>Most change</span>
       </div>
     </div>
 
@@ -273,16 +274,19 @@
 // Config
 // ─────────────────────────────────────────────────────────────
 const HDF5_URL = "NISAR_L2.h5";  // local HDF5 file (served alongside HTML)
-// CSV is published to the `nisar-data` branch by the weekly GitHub Actions workflow.
-// Using the fork's nisar-data branch; once upstreamed, change to ModelEarth/nisar.
-const CSV_URL  =
-  "https://raw.githubusercontent.com/venkataseetharam/nisar/nisar-data/data/nisar_subsidence.csv";
+// CSV source order: local repo copy first (works on localhost + GitHub Pages),
+// then the `nisar-data` branch the weekly GitHub Actions workflow publishes to.
+const CSV_URLS = [
+  "../data/nisar_subsidence.csv",
+  "https://raw.githubusercontent.com/venkataseetharam/nisar/nisar-data/data/nisar_subsidence.csv",
+];
 
-// Fallback city data (used if both HDF5 and CSV fail)
+// Fallback city data (used if all CSV sources fail). New date-pair schema:
+// mm of line-of-sight elevation change over the interferogram interval.
 const FALLBACK = [
-  { lat:29.76,  lon:-95.37,  cm:1.0,  place:"Houston, TX",           state:"Texas",   county:"Harris County", zip:"77002", season:"annual", source:"reference" },
-  { lat:35.69,  lon:51.39,   cm:33.0, place:"Tehran, Iran",           state:"",        county:"",              zip:"",      season:"annual", source:"reference" },
-  { lat:-6.13,  lon:106.84,  cm:27.9, place:"North Jakarta, Indonesia",state:"",       county:"",              zip:"",      season:"annual", source:"reference" },
+  { lat:29.76, lon:-95.37, mm:-7.8, place:"Harris County, TX", state:"Texas", county:"Harris County", zip:"77002", season:"Fall", source:"NISAR-GUNW", refDate:"2025-10-17", secDate:"2025-10-29", baselineDays:12 },
+  { lat:36.75, lon:-119.77, mm:-11.3, place:"Fresno County, CA", state:"California", county:"Fresno County", zip:"93721", season:"Fall", source:"NISAR-GUNW", refDate:"2025-10-17", secDate:"2025-10-29", baselineDays:12 },
+  { lat:33.45, lon:-112.07, mm:-6.7, place:"Maricopa County, AZ", state:"Arizona", county:"Maricopa County", zip:"85003", season:"Fall", source:"NISAR-GUNW", refDate:"2025-10-17", secDate:"2025-10-29", baselineDays:12 },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -343,11 +347,23 @@ function heatColor(norm) {
   return `hsl(${hue.toFixed(0)}, 100%, 50%)`;
 }
 
-function rateText(cm, unit) {
-  return unit === "in"
-    ? `${(cm / 2.54).toFixed(2)} in/yr`
-    : `${cm.toFixed(2)} cm/yr`;
+/**
+ * Format a record's elevation change. In "mm" mode shows the raw
+ * line-of-sight change over the interferogram interval; in "cmYr" mode
+ * annualises it (mm over N days → cm/year). Sign preserved: negative =
+ * subsidence, positive = uplift.
+ */
+function changeText(mm, baselineDays, unit) {
+  if (unit === "cmYr") {
+    const days = baselineDays > 0 ? baselineDays : 12;
+    const cmYr = (mm / days) * 365 / 10;   // mm/interval → cm/year
+    return `${cmYr >= 0 ? "+" : ""}${cmYr.toFixed(1)} cm/yr`;
+  }
+  return `${mm >= 0 ? "+" : ""}${mm.toFixed(1)} mm / ${baselineDays || 12} d`;
 }
+
+// Magnitude (abs) used for colour + sizing, independent of display unit.
+function magnitude(mm) { return Math.abs(mm); }
 
 function fitToVisible(animate = true) {
   const pts = [];
@@ -403,12 +419,11 @@ function renderHeatmap(lats, lons, vals, min, max) {
 
     const norm  = max > min ? (v - min) / (max - min) : 0.5;
     const color = heatColor(norm);
-    const cm    = Math.abs(v) * 100; // assume raw value in metres, convert to cm
 
     L.circleMarker([lat, lon], {
       radius: 2.5, color, weight: 0, fillColor: color, fillOpacity: 0.85
     }).bindPopup(
-      `<strong>Subsidence:</strong> ${rateText(cm, unit)}<br>
+      `<strong>Value:</strong> ${(+v).toFixed(4)}<br>
        <strong>Lat:</strong> ${lat.toFixed(4)}<br>
        <strong>Lon:</strong> ${lon.toFixed(4)}`
     ).addTo(markersLayer);
@@ -492,25 +507,40 @@ function parseLine(line) {
   return vals.map(v => v.trim());
 }
 
-function toCm(val, unit) {
+/**
+ * Convert a CSV value to mm of elevation change over the interferogram
+ * interval. Handles both the new GUNW schema (mm/interval) and the legacy
+ * cm/year reference rows (annual → approximate per-interval mm).
+ */
+function toMm(val, unit, baselineDays) {
   const n = parseFloat(val);
   if (!isFinite(n)) return null;
-  return String(unit).toLowerCase().includes("in") ? n * 2.54 : n;
+  const u = String(unit || "").toLowerCase();
+  if (u.includes("mm")) return n;                    // already mm/interval
+  if (u.includes("cm")) {                            // legacy cm/year → mm/interval
+    const days = baselineDays > 0 ? baselineDays : 12;
+    return -(n * 10) * (days / 365);                 // legacy values are subsidence (sinking)
+  }
+  return n;
 }
 
 function normalizeRow(row) {
   const lat = parseFloat(row.lat || row.latitude);
   const lon = parseFloat(row.lon || row.longitude);
-  const cm  = toCm(row.subsidence_value || row.value,
-                   row.subsidence_unit  || row.unit || "cm/year");
-  if (!isFinite(lat) || !isFinite(lon) || !isFinite(cm)) return null;
+  const baselineDays = parseInt(row.baseline_days, 10) || 12;
+  const mm = toMm(row.subsidence_value || row.value,
+                  row.subsidence_unit  || row.unit || "mm/interval",
+                  baselineDays);
+  if (!isFinite(lat) || !isFinite(lon) || mm == null || !isFinite(mm)) return null;
   return {
-    id:     `${lat},${lon}`,
-    place:  row.location_name || "Unknown",
-    state:  row.state  || "", county: row.county || "",
-    zip:    row.zip    || "", season: row.season || "annual",
-    source: row.source || "NISAR",
-    lat, lon, cm,
+    id:      `${lat},${lon}`,
+    place:   row.location_name || "Unknown",
+    state:   row.state  || "", county: row.county || "",
+    zip:     row.zip    || "", season: row.season || "annual",
+    source:  row.source || "NISAR-GUNW",
+    refDate: row.ref_date || "", secDate: row.sec_date || row.source_date || "",
+    baselineDays,
+    lat, lon, mm,
   };
 }
 
@@ -526,18 +556,20 @@ function parseCsv(text) {
 
 async function loadCSV() {
   setStatus("Loading CSV data…", "loading");
-  try {
-    const res = await fetch(CSV_URL, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = parseCsv(await res.text());
-    if (!rows.length) throw new Error("0 valid rows");
-    setStatus(`CSV loaded — ${rows.length} locations`);
-    return rows;
-  } catch (err) {
-    console.warn("CSV load failed, using fallback:", err);
-    setStatus("Using reference data (CSV fetch failed)", "error");
-    return FALLBACK;
+  for (const url of CSV_URLS) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const rows = parseCsv(await res.text());
+      if (!rows.length) throw new Error("0 valid rows");
+      setStatus(`CSV loaded — ${rows.length} locations`);
+      return rows;
+    } catch (err) {
+      console.warn(`CSV load failed (${url}):`, err);
+    }
   }
+  setStatus("Using reference data (CSV fetch failed)", "error");
+  return FALLBACK;
 }
 
 function populateFilters(records) {
@@ -573,17 +605,19 @@ function visibleCSV() {
 
 function renderSeasonSummary(visible) {
   const bySeason = {};
-  visible.forEach(r => { (bySeason[r.season] = bySeason[r.season] || []).push(r.cm); });
+  visible.forEach(r => { (bySeason[r.season] = bySeason[r.season] || []).push(r); });
   const seasons = Object.keys(bySeason);
   if (!seasons.length) { seasonSum.classList.remove("visible"); return; }
   const unit = unitSelect.value;
   seasonSum.classList.add("visible");
   seasonGrid.innerHTML = seasons.map(s => {
-    const avg = bySeason[s].reduce((a, b) => a + b, 0) / bySeason[s].length;
-    const disp = rateText(avg, unit);
+    const recs = bySeason[s];
+    const avgMm   = recs.reduce((a, r) => a + r.mm, 0) / recs.length;
+    const avgBase = Math.round(recs.reduce((a, r) => a + r.baselineDays, 0) / recs.length);
+    const disp = changeText(avgMm, avgBase, unit);
     return `<div class="season-card">
       <div class="s-name">${s}</div>
-      <div class="s-val">avg ${disp}<br><small>${bySeason[s].length} loc.</small></div>
+      <div class="s-val">avg ${disp}<br><small>${recs.length} loc.</small></div>
     </div>`;
   }).join("");
 }
@@ -595,11 +629,14 @@ function renderCSVMap() {
 
   if (!list.length) { setStatus("No records match filters", "error"); return; }
 
-  const maxCm = Math.max(...list.map(r => r.cm));
+  const maxMag = Math.max(...list.map(r => magnitude(r.mm)), 1e-6);
   list.forEach(r => {
-    const norm  = maxCm > 0 ? r.cm / maxCm : 0.5;
+    const mag   = magnitude(r.mm);
+    const norm  = mag / maxMag;
     const color = heatColor(norm);
-    const radius = Math.max(5, Math.min(20, 5 + r.cm * 0.3));
+    const radius = Math.max(5, Math.min(20, 5 + mag * 0.8));
+    const interval = (r.refDate && r.secDate)
+      ? `<strong>Interval:</strong> ${r.refDate} → ${r.secDate} (${r.baselineDays} d)<br>` : "";
 
     const m = L.circleMarker([r.lat, r.lon], {
       radius, color, weight: 1.5, fillColor: color, fillOpacity: 0.4
@@ -607,7 +644,8 @@ function renderCSVMap() {
       <strong>${r.place}</strong><br>
       ${[r.county, r.state].filter(Boolean).join(", ")}<br>
       ${r.zip ? `ZIP ${r.zip}<br>` : ""}
-      <strong>Rate:</strong> ${rateText(r.cm, unit)}<br>
+      <strong>Elevation change:</strong> ${changeText(r.mm, r.baselineDays, unit)}<br>
+      ${interval}
       <strong>Season:</strong> ${r.season}<br>
       <strong>Source:</strong> ${r.source}
     `);
@@ -623,15 +661,16 @@ function renderCSVMap() {
 
 function renderRecordList(list, unit) {
   if (!list.length) { recordsEl.innerHTML = "<p class='subtext'>No records match this filter.</p>"; return; }
-  const maxCm = Math.max(...list.map(r => r.cm));
+  const maxMag = Math.max(...list.map(r => magnitude(r.mm)), 1e-6);
   recordsEl.innerHTML = list.map(r => {
-    const color = heatColor(maxCm > 0 ? r.cm / maxCm : 0.5);
+    const color = heatColor(magnitude(r.mm) / maxMag);
     const meta  = [r.county, r.state, r.zip ? `ZIP ${r.zip}` : ""].filter(Boolean).join(" · ");
+    const dates = (r.refDate && r.secDate) ? `${r.refDate} → ${r.secDate}` : `Season: ${r.season}`;
     return `<article class="record" data-id="${r.id}" style="border-left-color:${color};">
       <h3>${r.place}</h3>
       ${meta ? `<p class="meta">${meta}</p>` : ""}
-      <p class="meta">Season: ${r.season}</p>
-      <p class="rate" style="color:${color};">${rateText(r.cm, unit)}</p>
+      <p class="meta">${dates}</p>
+      <p class="rate" style="color:${color};">${changeText(r.mm, r.baselineDays, unit)}</p>
     </article>`;
   }).join("");
 
@@ -681,9 +720,9 @@ unitSelect.addEventListener("change", () => { if (dataSource.value === "csv") re
 fitBtn.addEventListener("click", () => fitToVisible(true));
 
 // ─────────────────────────────────────────────────────────────
-// Boot — start in HDF5 heatmap mode; fall back to CSV if needed
+// Boot — start in GUNW CSV mode (elevation change over 6–12 days)
 // ─────────────────────────────────────────────────────────────
-activateMode("hdf5");
+activateMode("csv");
 </script>
 </body>
 </html>
