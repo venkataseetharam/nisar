@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NISAR HDF5 Footprint Viewer</title>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #1f2a1f;
+        }
+        #map { width: 100%; height: 100vh; }
+        #info-panel {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 1000;
+            background: #ffffff;
+            padding: 16px 18px;
+            border-radius: 10px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+            max-width: 360px;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        #info-panel h3 {
+            margin-bottom: 8px;
+            font-size: 15px;
+            color: #2f7d32;
+        }
+        #info-panel dl {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 4px 10px;
+            margin-top: 8px;
+        }
+        #info-panel dt { color: #5d6e5d; font-weight: 600; }
+        #info-panel dd { word-break: break-word; }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            border-bottom: 1px dashed #e7ece7;
+        }
+        .stat-row:last-child { border-bottom: none; }
+        .note {
+            margin-top: 10px;
+            padding: 8px 10px;
+            background: #f3f6f3;
+            border-left: 3px solid #2f7d32;
+            font-size: 12px;
+            color: #455045;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            background: white;
+            padding: 24px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid #e7ece7;
+            border-top: 4px solid #2f7d32;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .hidden { display: none; }
+        #error { color: #c0392b; margin-top: 10px; font-size: 12px; }
+        a { color: #2f7d32; }
+        #back-link {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 1000;
+            background: #2f7d32;
+            color: #fff;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 14px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+        }
+        #back-link:hover { filter: brightness(0.92); }
+    </style>
+</head>
+<body>
+    <a id="back-link" href="index.html">&larr; Back to main map</a>
+    <div id="map"></div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="loadingText">Loading NISAR metadata…</div>
+        <div id="error"></div>
+    </div>
+
+    <div id="info-panel" class="hidden">
+        <h3 id="panel-title">NISAR L2 Sample</h3>
+        <div id="panel-summary"></div>
+        <dl id="panel-meta"></dl>
+        <div id="panel-stats" style="margin-top: 10px;"></div>
+        <div class="note">
+            This is a NISAR sample <strong>GCOV</strong> (Geocoded Covariance / backscatter)
+            granule — it doesn't carry displacement values directly. The outlined
+            polygon is the radar swath footprint parsed from the file's
+            <code>boundingPolygon</code>. For per-location subsidence rates,
+            see the <a href="index.html">main elevation-change map</a>.
+        </div>
+    </div>
+
+    <script>
+        const METADATA_URL = "nisar_l2_metadata.json";
+
+        const map = L.map("map", {
+            scrollWheelZoom: false,
+            doubleClickZoom: false
+        }).setView([20, 0], 2);
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: "&copy; OpenStreetMap contributors"
+        }).addTo(map);
+
+        let zoomEnabled = false;
+        map.on("click", () => {
+            zoomEnabled = !zoomEnabled;
+            if (zoomEnabled) {
+                map.scrollWheelZoom.enable();
+                map.doubleClickZoom.enable();
+            } else {
+                map.scrollWheelZoom.disable();
+                map.doubleClickZoom.disable();
+            }
+        });
+
+        const loadingDiv = document.getElementById("loading");
+        const loadingText = document.getElementById("loadingText");
+        const errorDiv = document.getElementById("error");
+        const infoPanel = document.getElementById("info-panel");
+
+        function renderFootprint(polygon, identification) {
+            if (!polygon || !polygon.length) {
+                throw new Error("boundingPolygon was missing or empty in sidecar JSON");
+            }
+
+            const layer = L.polygon(polygon, {
+                color: "#2f7d32",
+                weight: 2,
+                fillColor: "#2f7d32",
+                fillOpacity: 0.18
+            }).addTo(map);
+
+            const lats = polygon.map(p => p[0]);
+            const lons = polygon.map(p => p[1]);
+            const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+            const centerLon = (Math.min(...lons) + Math.max(...lons)) / 2;
+
+            const popupHtml = `
+                <strong>${identification.granuleId || "NISAR granule"}</strong><br>
+                ${identification.zeroDopplerStartTime || ""}<br>
+                Instrument: ${identification.instrumentName || "—"}<br>
+                Track ${identification.trackNumber ?? "?"} / Frame ${identification.frameNumber ?? "?"}
+            `;
+            L.marker([centerLat, centerLon]).addTo(map).bindPopup(popupHtml).openPopup();
+            map.fitBounds(layer.getBounds(), { padding: [40, 40] });
+        }
+
+        function populatePanel(identification, qaStats) {
+            const productName = `${identification.missionId || "NISAR"} ${identification.productType || "L2"} (${identification.radarBand || "L"}-band)`;
+            document.getElementById("panel-title").textContent = productName;
+
+            document.getElementById("panel-summary").innerHTML = `
+                <div>Acquired ${identification.zeroDopplerStartTime || "unknown"}.</div>
+                <div>Processed ${identification.processingDateTime || "unknown"} at ${identification.processingCenter || "—"}.</div>
+            `;
+
+            const metaRows = [
+                ["Granule", identification.granuleId],
+                ["Instrument", identification.instrumentName],
+                ["Mission", identification.missionId],
+                ["Track / Frame", `${identification.trackNumber ?? "?"} / ${identification.frameNumber ?? "?"}`],
+                ["Orbit", `${identification.absoluteOrbitNumber ?? "?"} (${identification.orbitPassDirection || "?"})`],
+                ["Look direction", identification.lookDirection],
+                ["Product DOI", identification.productDoi],
+                ["Spec version", identification.productSpecificationVersion],
+            ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+
+            document.getElementById("panel-meta").innerHTML = metaRows
+                .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+                .join("");
+
+            const polarizations = qaStats ? Object.keys(qaStats) : [];
+            if (polarizations.length) {
+                const polStatsHtml = polarizations.map((pol) => {
+                    const stats = qaStats[pol];
+                    return `
+                        <strong>Backscatter QA (${pol})</strong>
+                        ${Object.entries(stats).map(([k, v]) => {
+                            const label = k.replace(/_/g, " ");
+                            const num = Number(v);
+                            const display = Number.isFinite(num) ? num.toExponential(3) : v;
+                            return `<div class="stat-row"><span>${label}</span><span>${display}</span></div>`;
+                        }).join("")}
+                    `;
+                }).join("");
+                document.getElementById("panel-stats").innerHTML = polStatsHtml;
+            }
+
+            infoPanel.classList.remove("hidden");
+        }
+
+        async function main() {
+            try {
+                const resp = await fetch(METADATA_URL, { cache: "no-store" });
+                if (!resp.ok) {
+                    throw new Error(`Could not fetch ${METADATA_URL} (HTTP ${resp.status}). ` +
+                        `Run pipeline/extract_h5_metadata.py to regenerate it.`);
+                }
+                const meta = await resp.json();
+                renderFootprint(meta.boundingPolygonLatLon, meta.identification || {});
+                populatePanel(meta.identification || {}, meta.qaStats || {});
+                loadingDiv.classList.add("hidden");
+            } catch (err) {
+                console.error(err);
+                loadingText.textContent = "Could not display NISAR metadata";
+                errorDiv.textContent = err.message || String(err);
+            }
+        }
+
+        window.addEventListener("load", main);
+    </script>
+</body>
+</html>
