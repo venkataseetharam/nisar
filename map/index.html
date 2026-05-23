@@ -104,10 +104,10 @@
     .color-bar {
       height: 12px;
       border-radius: 4px;
-      /* uplift (blue) — stable (grey) — subsidence (yellow→red) */
+      /* uplift (green) — stable (grey) — subsidence (red) */
       background: linear-gradient(to right,
-        #0b4f9e 0%, #5599d8 22%, #555555 45%, #555555 55%,
-        #f2d000 70%, #e8800f 85%, #c40d0d 100%);
+        #235d39 0%, #4a7a5e 12.5%, #6fa082 25%, #a8cdb5 37.5%, #e5e5e5 50%,
+        #f5b4b0 62.5%, #e88880 75%, #d85c52 87.5%, #c0392b 100%);
       margin-bottom: 4px;
     }
     .color-labels {
@@ -170,7 +170,7 @@
         Ground-deformation hotspots from published NISAR / Sentinel-1
         InSAR studies and government subsidence monitoring. Colour shows
         the <strong>direction</strong> of change — red = land sinking
-        (subsidence), blue = uplift, dark grey = stable.
+        (subsidence), green = uplift, grey = stable.
       </p>
     </div>
 
@@ -189,8 +189,6 @@
         <option value="in">inches / year</option>
       </select>
     </div>
-
-    <button id="fitBtn">Fit To Visible Points</button>
 
     <!-- Diverging color scale -->
     <div class="legend-wrap">
@@ -258,7 +256,6 @@ map.on("click", () => {
 const statusBar    = document.getElementById("statusBar");
 const regionFilter = document.getElementById("regionFilter");
 const unitSelect   = document.getElementById("unitSelect");
-const fitBtn       = document.getElementById("fitBtn");
 const recordsEl    = document.getElementById("records");
 
 const markersLayer = L.layerGroup().addTo(map);
@@ -266,6 +263,13 @@ const markerById   = new Map();
 let records = [];
 
 const STABLE_CM = 0.3;   // |cm/yr| below this is treated as "no change"
+const DOT_RADIUS = 5;    // all circles the same small size
+
+// 9-step diverging scale: dark green (uplift) → grey (stable) → dark red (subsidence)
+const COLOR_SCALE = [
+  "#235d39", "#4a7a5e", "#6fa082", "#a8cdb5", "#e5e5e5",
+  "#f5b4b0", "#e88880", "#d85c52", "#c0392b",
+];
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -277,17 +281,14 @@ function setStatus(msg, type = "ok") {
 
 /**
  * Direction-aware diverging colour. cm is signed (negative = subsidence).
- * Stable → dark grey; subsidence → yellow→red; uplift → light→dark blue.
+ * Stable → grey (centre); uplift → greens; subsidence → reds.
  * Magnitude is scaled against maxMag (the largest |cm| currently shown).
  */
 function changeColor(cm, maxMag) {
-  const mag = Math.abs(cm);
-  if (mag < STABLE_CM) return "#555555";       // dark grey — no meaningful change
-  const t = Math.min(1, mag / (maxMag || 1));  // 0..1
-  if (cm < 0) {                                 // subsidence: yellow(60°) → red(0°)
-    return `hsl(${(60 - 60 * t).toFixed(0)}, 85%, 45%)`;
-  }
-  return `hsl(210, 80%, ${(70 - 35 * t).toFixed(0)}%)`;  // uplift: light → dark blue
+  if (Math.abs(cm) < STABLE_CM) return COLOR_SCALE[4];   // grey — no meaningful change
+  const t = Math.max(-1, Math.min(1, cm / (maxMag || 1))); // +1 uplift … −1 subsidence
+  const idx = Math.max(0, Math.min(8, Math.round(4 * (1 - t))));
+  return COLOR_SCALE[idx];
 }
 
 function direction(cm) {
@@ -300,7 +301,7 @@ function rateText(cm, unit) {
   const v = unit === "in" ? cm / 2.54 : cm;
   const u = unit === "in" ? "in/yr" : "cm/yr";
   const sign = v > 0 ? "+" : "";
-  return `${sign}${v.toFixed(1)} ${u} (${direction(cm)})`;
+  return `${sign}${v.toFixed(1)} ${u}`;
 }
 
 function fitToVisible(animate = true) {
@@ -408,7 +409,6 @@ function render() {
 
   list.forEach(r => {
     const color  = changeColor(r.cm, maxMag);
-    const radius = Math.max(6, Math.min(22, 6 + Math.abs(r.cm) * 0.35));
     const srcLine = r.sourceUrl
       ? `<a href="${r.sourceUrl}" target="_blank" rel="noopener">${r.source}</a>`
       : r.source;
@@ -416,7 +416,7 @@ function render() {
       ? `<br><span style="color:#5d6e5d; font-size:0.85em;">${r.notes}</span>` : "";
 
     const m = L.circleMarker([r.lat, r.lon], {
-      radius, color, weight: 1.5, fillColor: color, fillOpacity: 0.55
+      radius: DOT_RADIUS, color, weight: 1, fillColor: color, fillOpacity: 0.85
     }).bindPopup(`
       <strong>${r.place}</strong><br>
       ${[r.area, r.region, r.country].filter(Boolean).join(", ")}<br>
@@ -459,7 +459,6 @@ function renderRecordList(list, unit, maxMag) {
 // ─────────────────────────────────────────────────────────────
 regionFilter.addEventListener("change", render);
 unitSelect.addEventListener("change", render);
-fitBtn.addEventListener("click", () => fitToVisible(true));
 
 (async function boot() {
   records = await loadCSV();
