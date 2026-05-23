@@ -104,18 +104,21 @@
     .color-bar {
       height: 12px;
       border-radius: 4px;
-      /* uplift (green) — stable (grey) — subsidence (red) */
+      /* sinking (red) — stable (grey) — uplift (green) */
       background: linear-gradient(to right,
-        #235d39 0%, #4a7a5e 12.5%, #6fa082 25%, #a8cdb5 37.5%, #e5e5e5 50%,
-        #f5b4b0 62.5%, #e88880 75%, #d85c52 87.5%, #c0392b 100%);
+        #c0392b 0%, #d85c52 12.5%, #e88880 25%, #f5b4b0 37.5%, #e5e5e5 50%,
+        #a8cdb5 62.5%, #6fa082 75%, #4a7a5e 87.5%, #235d39 100%);
       margin-bottom: 4px;
     }
     .color-labels {
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
       font-size: 0.72rem;
       color: var(--muted);
     }
+    .color-labels span:nth-child(1) { text-align: left; }
+    .color-labels span:nth-child(2) { text-align: center; }
+    .color-labels span:nth-child(3) { text-align: right; }
 
     .records { display: grid; gap: 7px; }
     .record {
@@ -169,8 +172,8 @@
       <p class="subtext" style="margin-top:6px;">
         Ground-deformation hotspots from published NISAR / Sentinel-1
         InSAR studies and government subsidence monitoring. Colour shows
-        the <strong>direction</strong> of change — red = land sinking
-        (subsidence), green = uplift, grey = stable.
+        the <strong>direction</strong> of change — red = sinking,
+        green = uplift, grey = stable.
       </p>
     </div>
 
@@ -195,7 +198,7 @@
       <div class="legend-title">Direction of elevation change</div>
       <div class="color-bar"></div>
       <div class="color-labels">
-        <span>Uplift</span><span>Stable</span><span>Subsidence</span>
+        <span>Sinking</span><span>Stable</span><span>Uplift</span>
       </div>
     </div>
 
@@ -262,14 +265,16 @@ const markersLayer = L.layerGroup().addTo(map);
 const markerById   = new Map();
 let records = [];
 
-const STABLE_CM = 0.3;   // |cm/yr| below this is treated as "no change"
+const STABLE_CM = 0.2;   // |cm/yr| below this is treated as "no change" (grey)
 const DOT_RADIUS = 5;    // all circles the same small size
 
-// 9-step diverging scale: dark green (uplift) → grey (stable) → dark red (subsidence)
-const COLOR_SCALE = [
-  "#235d39", "#4a7a5e", "#6fa082", "#a8cdb5", "#e5e5e5",
-  "#f5b4b0", "#e88880", "#d85c52", "#c0392b",
-];
+const STABLE_COLOR = "#e5e5e5";                                  // grey — stable
+// light → dark, by magnitude bucket
+const RED_SHADES   = ["#f5b4b0", "#e88880", "#d85c52", "#c0392b"]; // sinking
+const GREEN_SHADES = ["#a8cdb5", "#6fa082", "#4a7a5e", "#235d39"]; // uplift
+
+// Absolute |cm/yr| breakpoints. -0.2…-7 cm => the two light red shades.
+const MAG_BREAKS = [2, 7, 15];   // <2, <7, <15, >=15
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -280,15 +285,16 @@ function setStatus(msg, type = "ok") {
 }
 
 /**
- * Direction-aware diverging colour. cm is signed (negative = subsidence).
- * Stable → grey (centre); uplift → greens; subsidence → reds.
- * Magnitude is scaled against maxMag (the largest |cm| currently shown).
+ * Direction-aware diverging colour by absolute rate (signed cm/yr,
+ * negative = sinking). |cm| < 0.2 → grey; otherwise a light→dark shade
+ * of red (sinking) or green (uplift) by magnitude bucket.
  */
-function changeColor(cm, maxMag) {
-  if (Math.abs(cm) < STABLE_CM) return COLOR_SCALE[4];   // grey — no meaningful change
-  const t = Math.max(-1, Math.min(1, cm / (maxMag || 1))); // +1 uplift … −1 subsidence
-  const idx = Math.max(0, Math.min(8, Math.round(4 * (1 - t))));
-  return COLOR_SCALE[idx];
+function changeColor(cm) {
+  const mag = Math.abs(cm);
+  if (mag < STABLE_CM) return STABLE_COLOR;
+  let bucket = MAG_BREAKS.findIndex(b => mag < b);
+  if (bucket === -1) bucket = MAG_BREAKS.length;   // >= last break → darkest
+  return (cm < 0 ? RED_SHADES : GREEN_SHADES)[bucket];
 }
 
 function direction(cm) {
@@ -405,10 +411,8 @@ function render() {
   const list = visible();
   if (!list.length) { setStatus("No records match filter", "error"); recordsEl.innerHTML = ""; return; }
 
-  const maxMag = Math.max(...list.map(r => Math.abs(r.cm)), 1e-6);
-
   list.forEach(r => {
-    const color  = changeColor(r.cm, maxMag);
+    const color  = changeColor(r.cm);
     const srcLine = r.sourceUrl
       ? `<a href="${r.sourceUrl}" target="_blank" rel="noopener">${r.source}</a>`
       : r.source;
@@ -429,15 +433,15 @@ function render() {
   });
 
   fitToVisible(false);
-  renderRecordList(list, unit, maxMag);
+  renderRecordList(list, unit);
   setStatus(`${list.length} location${list.length > 1 ? "s" : ""} shown`);
 }
 
-function renderRecordList(list, unit, maxMag) {
+function renderRecordList(list, unit) {
   // Sort by magnitude, largest change first
   const sorted = [...list].sort((a, b) => Math.abs(b.cm) - Math.abs(a.cm));
   recordsEl.innerHTML = sorted.map(r => {
-    const color = changeColor(r.cm, maxMag);
+    const color = changeColor(r.cm);
     const meta  = [r.area, r.region, r.country].filter(Boolean).join(" · ");
     return `<article class="record" data-id="${r.id}" style="border-left-color:${color};">
       <h3>${r.place}</h3>
